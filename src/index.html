@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+
+<!--
+  COLLABORATORS: None
+
+  Reference: StackOverflow  
+-->
+<html>
+
+<head>
+<meta content="text/html; charset=utf-8" http-equiv="Content-Type" />
+<title>Checkerboard</title>
+
+<!-- Load style sheets -->
+<link rel="stylesheet" type="text/css" href="mainLayout.css" />
+
+<!-- Load any supplemental Javascript libraries here -->
+<script type="text/javascript" src="external_js/jquery-1.9.0.min.js"></script>
+<script type="text/javascript" src="external_js/jquery-1.10.2.js"></script>
+<script type="text/javascript" src="external_js/jquery-ui-1.10.4.custom.js"></script>
+<script type="text/javascript" src="external_js/jquery-ui-1.10.4.custom.min.js"></script>
+
+<script type="text/javascript" src="checker.js"></script>
+<script type="text/javascript" src="boardEvent.js"></script>
+<script type="text/javascript" src="board.js"></script>
+<script type="text/javascript" src="rules.js"></script>
+
+<script type="text/javascript">
+
+//This script extracts parameters from the URL
+//from jquery-howto.blogspot.com
+
+    $.extend({
+        getUrlVars : function() {
+            var vars = [], hash;
+            var hashes = window.location.href.slice(
+                    window.location.href.indexOf('?') + 1).split('&');
+            for ( var i = 0; i < hashes.length; i++) {
+                hash = hashes[i].split('=');
+                vars.push(hash[0]);
+                vars[hash[0]] = hash[1];
+            }
+            return vars;
+        },
+        getUrlVar : function(name) {
+            return $.getUrlVars()[name];
+        }
+    });
+
+    var DEFAULT_BOARD_SIZE = 8;
+
+    //data model
+    var board;
+    var rules;
+    var whoseTurn = "black";	
+
+    var directionOf = function(color) {
+      if (color == "black") {
+        return -1;
+      }
+      return 1;
+    }
+
+    // Fill in this function to toggle the display for whose turn
+    // The color parameter should be either "black" or "red"
+    var toggleTurn = function(color) {
+	   if (color == "black") {
+            whoseTurn = "red";
+            $("#turn").text("Red Turn");
+        }
+        else  {
+            whoseTurn = "black";
+            $("#turn").text("Black Turn");
+        }
+    }
+
+    // This allows the Javascript code inside this block to only run when the page
+    // has finished loading in the browser.
+    $(document).ready(function() {
+
+        if ($.getUrlVar('size') && $.getUrlVar('size') >= 6) {
+            board = new Board($.getUrlVar('size'));
+        } else {
+            board = new Board(DEFAULT_BOARD_SIZE);
+        }
+
+        boardSize = board.size();
+        squareSize = 400 / boardSize;
+        canvas = document.getElementById("canvas");
+        bound = canvas.getBoundingClientRect();
+        checkerSize = (1 - (.02 * boardSize)) * squareSize;
+
+	    rules = new Rules(board);
+
+        var previousMoves = [];
+        var undoneMoves = [];
+
+        var checker;
+        var fromRow;
+        var fromCol;
+        var toRow;
+        var toCol;
+
+        //building the checkerboard
+        function initializeBoard() {
+            var table = document.getElementById("table");
+            for (var x = 0; x < boardSize; x++) {
+                var row = table.insertRow(x);
+                row.style.height = squareSize + "px";
+                row.style.minHeight = squareSize + "px";
+                row.style.maxHeight = squareSize + "px";
+                row.border = "none";
+                row.className = "ui-droppable";
+                for (var y = 0; y < boardSize; y++) {
+                    var cell = row.insertCell(y);
+                    cell.style.width = squareSize + "px";
+                    cell.style.minWidth = squareSize + "px";
+                    cell.style.maxWidth = squareSize + "px";
+                    cell.align = "center";
+                    cell.vAlign = "bottom";
+                    cell.style.borderSpacing = "0px";
+                    cell.style.padding = "0px";
+                    cell.id = x + ',' + y;
+                    cell.className = "ui-droppable";
+                    if ((x + y) % 2 == 1) {
+                        cell.style.color = "black";
+                        cell.style.backgroundColor = "black";
+                    }
+                }
+            }
+            $("#droppable").droppable({ 
+                drop: function(event, ui) { 
+                    console.log("droppable");
+                },
+                accept: ".ui-draggable"
+            });
+            updateButtons();
+        }
+
+        board.addEventListener('add',function (e) {
+    		var details = e.details;
+            var checker = details.checker;
+            var row = details.row;
+            var col = details.col;
+
+            var cell = getCell(row, col);
+            var type = selectImage(checker);
+            addImage(type, cell);
+    	},true);
+
+    	board.addEventListener('move',function (e) {
+            clearCanvas();
+
+    		var details = e.details;
+            var checker = details.checker;
+            var toRow = details.toRow;
+            var toCol = details.toCol;
+            var fromRow = details.fromRow;
+            var fromCol = details.fromCol;
+
+            clearCell(fromRow, fromCol);
+
+            var newCell = getCell(toRow, toCol);
+            var type = selectImage(checker);
+            addImage(type, newCell);
+            drawArrow((fromCol + .5) * squareSize, (fromRow + .5) * squareSize, (toCol + .5) * squareSize, (toRow + .5) * squareSize);
+
+            if (undoneMoves.length != 0) {
+                var move = undoneMoves[undoneMoves.length - 1];
+                var moveDirection = -1 * (move.from_row - move.to_row);
+                if (moveDirection == checkTurn()) {
+                    undoneMoves.splice(-1, 1);
+                }
+            }
+
+            updateButtons();
+    	},true);
+
+        board.addEventListener('remove', function(e) {
+        	var details = e.details;
+            var row = details.row;
+            var col = details.col;
+
+            clearCell(row, col);
+        }, true);
+        
+        $("#btnNewGame").click(function(evt) {
+            board.prepareNewGame();
+            if (whoseTurn == "red") {
+                toggleTurn(whoseTurn);
+            }
+            clearCanvas();
+            previousMoves = [];
+            undoneMoves = [];
+            updateButtons();
+        });
+
+        $("#btnAutoMove").click(function(evt) {
+            var playerColor = whoseTurn;
+            var playerDirection = directionOf(playerColor);
+            var result = rules.makeRandomMove(playerColor, playerDirection);
+            if (result != null) {
+                toggleTurn(playerColor);
+            }
+            previousMoves.push(result);
+            updateButtons();
+        });
+
+        $("#undo").click(function(evt) {
+            var move = previousMoves[previousMoves.length - 1];
+            previousMoves.splice(-1, 1);
+            undoneMoves.push(move);
+
+            undoRedo(move, "undo");
+
+            var checker = board.getCheckerAt(move.to_row, move.to_col);
+            board.moveTo(checker, move.from_row, move.from_col);
+            clearCell(move.to_row, move.to_col);
+            var type = selectImage(checker);
+            if (move.made_king) {
+                type = type.replace("king", "piece");
+            }
+            addImage(type, getCell(move.from_row, move.from_col));
+            toggleTurn(whoseTurn);
+            updateButtons();
+        });
+
+        $("#redo").click(function(evt) {
+            var move = undoneMoves[undoneMoves.length - 1];
+            console.log(move);
+            undoneMoves.splice(-1, 1);
+            previousMoves.push(move);
+
+            var moveDirection = -1 * (move.from_row - move.to_row);
+
+            if (moveDirection * checkTurn() > 0) {  
+                undoRedo(move, "redo");
+
+                var checker = board.getCheckerAt(move.from_row, move.from_col);
+                board.moveTo(checker, move.to_row, move.to_col);
+                clearCell(move.from_row, move.from_col);
+                var type = selectImage(checker);
+                addImage(type, getCell(move.to_row, move.to_col));
+                toggleTurn(whoseTurn);
+            }
+            updateButtons();
+        });
+
+        initializeBoard();
+        board.prepareNewGame();
+        
+
+        //HELPER METHODS
+
+        //to make newly added images draggable
+        function makeDraggable() {
+            $(".ui-draggable").draggable({
+                containment: $("#canvas"),
+                cursor: "move",
+                start: dragStart,
+                stop: dragStop,
+                //revert: true
+            });
+        }
+
+        //storing the checker being dragged
+        function dragStart(event, ui) {
+            fromCol = Math.floor((event.pageX - bound.left) / squareSize);
+            fromRow = Math.floor((event.pageY - bound.top) / squareSize);
+            checker = board.getCheckerAt(fromRow, fromCol);
+            $(this).css("z-index", 200);
+        }
+
+        //when the user releases the mouse after dragging
+        function dragStop(event, ui) {
+            toCol = Math.floor((event.pageX - bound.left) / squareSize);
+            toRow = Math.floor((event.pageY - bound.top) / squareSize);
+            var turnDirection = 1;
+            if (checker.color == "black") {
+                var turnDirection = -1;
+            } 
+
+            var result = rules.makeMove(checker, turnDirection, directionOf(whoseTurn), toRow, toCol);
+
+            if (result != null) {
+                previousMoves.push(result);
+                toggleTurn(whoseTurn);
+            }
+            else {
+                image = document.getElementById("checker-" + fromRow + ',' + fromCol);
+                image.style.display = 'none';
+                cell = getCell(fromRow, fromCol);
+                type = selectImage(checker);
+                addImage(type, cell);
+            }
+            updateButtons();
+        }
+
+        //select the proper image name based on checker type
+        function selectImage(checker) {
+            var image = "red-piece";
+            if (checker.color == "black") { image = "black-piece"; }
+            if (checker.isKing) {
+                if (checker.color == "black") { image = "black-king"; }
+                else { image = "red-king"; }
+            }
+            return image;
+        }
+
+        //add image to checkerboard based on type
+        function addImage(type, cell) {
+            id = cell.id;
+
+            var image = new Image();
+            image.width = (1 - (.02 * boardSize)) * squareSize;
+            image.height = (1 - (.02 * boardSize)) * squareSize;
+            image.id = "checker-" + id;
+            $(image).addClass("ui-draggable");
+
+            image.onload = function() {
+                $(cell).html(image);
+                makeDraggable();
+            }
+
+            image.src = "graphics/" + type + ".png";
+
+        }
+
+        //return the th element at row,col
+        function getCell(row, col) {
+            return document.getElementById(row + ',' + col);
+        }
+
+        //clear th element at row,col
+        function clearCell(row, col) {
+            var oldCell = getCell(row, col);
+            $(oldCell).html('');
+        }
+
+        //clear canvas of all arrows
+        function clearCanvas() {
+            var canvas = document.getElementById("canvas");
+            var context = canvas.getContext('2d');
+            context.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        //draw arrow on canvas
+        function drawArrow(fromCol, fromRow, toCol, toRow) {
+            clearCanvas();
+
+            var canvas = document.getElementById("canvas");
+            var context = canvas.getContext('2d');
+
+            var arrowhead = squareSize / 4;
+            var angle = Math.atan2(toRow - fromRow, toCol - fromCol);
+
+            context.beginPath();
+            context.lineWidth = 5;
+            context.fillStyle = "yellow";
+            context.strokeStyle = "yellow";
+            context.lineCap = "round";
+            context.moveTo(fromCol, fromRow);
+            context.lineTo(toCol, toRow);
+            context.moveTo(toCol, toRow);
+            context.lineTo(toCol - arrowhead * Math.cos(angle - Math.PI / 4), toRow - arrowhead * Math.sin(angle - Math.PI / 4));
+            context.lineTo(toCol - arrowhead * Math.cos(angle + Math.PI / 4), toRow - arrowhead * Math.sin(angle + Math.PI / 4));
+            context.lineTo(toCol, toRow);
+            
+            context.stroke();
+            context.fill();
+            context.closePath();
+        }
+
+        //update the undo and redo buttons according to the availability of those actions
+        function updateButtons() {
+            var undo = document.getElementById("undo");
+            var redo = document.getElementById("redo");
+            if (previousMoves.length == 0) {
+                undo.disabled = true;
+            }
+            else {
+                undo.disabled = false;
+            }
+            if (undoneMoves.length == 0) {
+                redo.disabled = true;
+            }
+            else {
+                redo.disabled = false;
+            }
+        }
+
+        //method for dealing with removed checkers in undo's and redo's
+        function undoRedo(move, state) {
+            if (move.remove.length > 0) {
+                for (var x = 0; x < move.remove.length; x++) {
+                    var removed = move.remove[x];
+                    var type = selectImage(removed);
+                    if (state == "undo") {
+                        addImage(type, getCell(removed.row, removed.col));
+                        board.add(removed, removed.row, removed.col);
+                    }
+                    else {
+                        clearCell(removed.row, removed.col);
+                        board.remove(removed, removed.row, removed.col);
+                    }
+                }
+            }
+        }
+
+        //return direction based on current turn
+        function checkTurn() {
+            if (whoseTurn == "red") {
+                return 1;
+            }
+            else return -1;
+        }
+
+    });
+</script>
+
+
+</head>
+
+<body>
+    <table id="mainTable">
+        <tr>
+            <td id="navigation">
+              <table>
+    			  <tr><td><div id = "turn"> Black Turn </div></td></tr>
+                  <tr><td><input id="btnNewGame" type="button" name="new" value="New Game"/></td></tr>
+                  <tr><td><input id="btnAutoMove" type="button" name="new" value="Auto Move"/></td></tr>
+                  <tr><td><input id = "undo" type = "button" name = "new" value = "Undo"/></td></tr>
+                  <tr><td><input id = "redo" type = "button" name = "new" value = "Redo"/></td></tr>
+
+                </table>
+            </td>
+
+            <td id="content">
+    			<table id = "table" class = "ui-droppable"></table>
+                <canvas id = "canvas" class = "ui-droppable" width = "400px" height = "400px"></canvas>
+            </td>
+        </tr>
+
+    </table>
+
+    <div id = "div"/>
+
+</body>
+
+</html>
+
